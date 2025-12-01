@@ -1,0 +1,153 @@
+name: Reusable Build and deploy Template
+
+permissions:
+  contents: read
+
+on:
+  workflow_call:
+    inputs:
+      root_dir:
+        required: true
+        type: string
+      docker_image_name:
+        required: true
+        type: string
+      environment_name:
+        required: true
+        type: string
+      deployment_target:
+        required: true
+        type: string
+        description: 'Openshift or Azure Kubernetes Service target (options - oc | aks)'
+
+jobs:
+  build-deploy:
+    runs-on: 'ubuntu-latest'
+    environment:
+      name: ${{ inputs.deployment_target }}_${{ inputs.environment_name }}
+    env:
+      DEPLOY_ENV_NAME: ${{ inputs.deployment_target }}_${{ inputs.environment_name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Load deployment env file
+        working-directory: ./rest-api-app/deployment
+        run: |
+          cat ${{ env.DEPLOY_ENV_NAME }}.env >> $GITHUB_ENV
+
+      - name: Install OpenShift
+        if: ${{ inputs.deployment_target == 'oc' }}
+        uses: redhat-actions/oc-installer@v1
+        with:
+          oc_version: '4.6'
+
+      - name: Login to OpenShift
+        if: ${{ inputs.deployment_target == 'oc' }}
+        uses: redhat-actions/oc-login@v1
+        with:
+          openshift_server_url: ${{ env.OPENSHIFT_SERVER_URL }}
+          openshift_token: ${{ secrets.OPENSHIFT_TOKEN }}
+          insecure_skip_tls_verify: true
+
+      - name: Install Azure CLI
+        if: ${{ inputs.deployment_target == 'aks' }}
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+      - name: Azure Login
+        if: ${{ inputs.deployment_target == 'aks' }}
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_LOGIN_CREDENTIALS }}
+
+      - name: Install AKS Kube & Set namespace
+        if: ${{ inputs.deployment_target == 'aks' }}
+        run: |
+          sudo az aks install-cli
+          sudo az aks install-cli --client-version latest
+          az aks get-credentials --resource-group ${{ env.AKS_RESOURCE_GROUP }} --name ${{ env.AKS_CLUSTER_NAME }} --overwrite-existing
+          kubelogin convert-kubeconfig -l azurecli
+          kubectl config set-context --current --namespace=${{ env.DEPLOYMENT_NAMESPACE }}
+          kubectl get all
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: "3.18.4"
+
+      - name: Login to Docker Registry # This can be cloudSmith, Azure Container Registry etc based on your setup
+        uses:  docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Set Docker Image Tag
+        id: metadata
+        run: |
+          timestamp=$(date +"%y%m%d")
+          image_version=${{ inputs.environment_name }}.${timestamp}.${GITHUB_SHA::7}
+          echo "image_version=$image_version" >> $GITHUB_OUTPUT
+          echo "image_tag=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_REPO }}/${{ inputs.docker_image_name }}:$image_version" >> $GITHUB_OUTPUT
+
+      - name: Build Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.root_dir }}
+          push: false
+          tags: ${{ steps.metadata.outputs.image_tag }}
+          target: prod
+          build-args: |
+            INSTALL_ENV=PROD
+
+      - name: Push Docker Image to Docker Registry
+        run: |
+          docker push ${{ steps.metadata.outputs.image_tag }}
+
+      - name: Login to Helm
+        run: |
+          helm registry login -u "${{ secrets.DOCKER_USERNAME }}" -p "${{ secrets.DOCKER_PASSWORD  }}" ${{ env.DOCKER_REGISTRY }}
+
+      - name: Package helm chart
+        run: |
+          helm dependency update ${{ inputs.root_dir }}/helm
+          helm package ${{ inputs.root_dir }}/helm --destination ./artifacts
+          helm push ./artifacts/*-*.tgz oci://${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_REPO }}/helm/${{ inputs.docker_image_name }}/
+
+      - name: Deploy helm chart
+        working-directory: ./${{ inputs.root_dir}}/helm
+        run: |
+          helm_args=" \
+            --set environment=${{ inputs.environment_name }} \
+            --set image.name=${{ inputs.docker_image_name }} \
+            --set image.tag=${{ steps.metadata.outputs.image_version }} \
+            --set image.repository=${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_REPO }}/${{ inputs.docker_image_name }} \
+            --set DB_USER_NAME=${{ secrets.DB_USER_NAME }} \
+            --set DB_PASSWORD=${{ secrets.DB_PASSWORD }} \
+          "
+
+          echo $helm_args
+          echo "-------------------------------------------------------------------------------------------------------------"
+
+          base_values="values.yaml"
+          overlay_file="overlays/${{ env.DEPLOY_ENV_NAME }}.yaml"
+          helm_dry_run_cmd='helm template $helm_args ${{ inputs.docker_image_name }} . --values $base_values'
+          helm_cmd='helm upgrade --install $helm_args ${{ inputs.docker_image_name }} . --values $base_values'
+
+          if [ -f "$overlay_file" ]; then
+            echo "Using overlay values from $overlay_file"
+            helm_dry_run_cmd="$helm_dry_run_cmd --values $overlay_file"
+            helm_cmd="$helm_cmd --values $overlay_file"
+          else
+            echo "Overlay values file '$overlay_file' not found. Proceeding with base values only."
+          fi
+
+          echo "--------------------------------------------------------------------------------------------"
+          echo "Final Helm command:"
+          echo "$helm_cmd"
+          echo "--------------------------------------------------------------------------------------------"
+
+          eval "$helm_dry_run_cmd --dry-run --debug" && \
+          echo "Dry-run passed. Proceeding to deploy ${{ inputs.docker_image_name }}..." && \
+          eval "$helm_cmd"

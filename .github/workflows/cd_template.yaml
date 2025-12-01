@@ -1,0 +1,42 @@
+name: CD | Deployment Template to Openshift(OC) & Azure Kubernetes Service(AKS)
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [dev]
+    paths-ignore:
+      - '<any-of-your-path-to-ignore>/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment to deploy'
+        required: true
+        type: choice
+        options:
+          - dev
+          - stg
+          - prd
+
+jobs:
+  build-and-deploy-openshift:
+    name: Deploy to OpenShift (OC)
+    uses: ./.github/workflows/reusable_build_deploy_template.yaml
+    with:
+      root_dir: .
+      docker_image_name: your-service-name
+      environment_name: ${{ github.event.inputs.environment || 'dev'}}
+      deployment_target: oc # oc means openshift
+    secrets: inherit
+
+  build-and-deploy-aks:
+    name: Deploy to Azure Kubernetes Service (AKS)
+    uses: ./.github/workflows/reusable_build_deploy_template.yaml
+    with:
+      root_dir: .
+      docker_image_name: your-service-name
+      environment_name: ${{ github.event.inputs.environment || 'dev'}}
+      deployment_target: aks # aks means Azure Kubernetes Service
+    secrets: inherit
+ 
