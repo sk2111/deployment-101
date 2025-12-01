@@ -1,0 +1,80 @@
+# Deployment yaml default values
+name: <your-app-name>
+
+# App environments like dev, stage, prod
+environment: <your-deployment-environment> # populated-in-cd-pipeline
+
+metadata:
+  name: "{{ .Values.name }}"
+  labels:
+    app: "{{ .Values.name }}"
+    environment: "{{ .Values.environment }}"
+
+deployment:
+  replicaCount: 1
+  updateStrategyEnabled: false
+  updateStrategy: {}
+  minReadySeconds: 10
+  revisionHistoryLimitEnabled: false
+  revisionHistoryLimit: 50
+
+securityContext:
+  enabled: false
+  context: {}
+
+image:
+  name: <your-image-name>
+  repository: <your-repository-name>
+  tag: <your-tag-name> # Always use specific versions, avoid 'latest' in production
+  pullPolicy: Always # Use Always for production
+  pullSecrets: [] # Add if using private registry
+
+container:
+  resourceLimitsEnabled: true
+  resourcesLimits:
+    limits:
+      cpu: "1.5" # CPU limit
+      memory: "1.5Gi" # Memory limit
+    requests:
+      cpu: "1" # CPU request
+      memory: "1Gi" # Memory request
+  probes:
+    livenessProbeEnabled: true
+    readinessProbeEnabled: true
+    liveness:
+      initialDelaySeconds: 35
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 5
+      successThreshold: 1
+      path: /assistant-service/v1/up
+    readiness:
+      initialDelaySeconds: 35
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 5
+      successThreshold: 1
+      path: /assistant-service/v1/up
+
+# Environment config
+DATABASE_NAME: <your-db-name>
+DATABASE_USER_NAME: <your-user-name> #base64 format secret
+DATABASE_PASSWORD: <your-password> #base64 format secret
+
+# Horizontal autopod scaler
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 1
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 70
+
+# Service yaml default values
+service:
+  name: "{{ .Values.name }}"
+  type: ClusterIP
+  protocol: TCP
+  port: 8000 # Service port
+  targetPort: 8000 # Container port
+  portName: http
+ 

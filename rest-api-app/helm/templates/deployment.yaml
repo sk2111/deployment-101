@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ tpl (toYaml .Values.metadata.name) . }}
+  labels:
+    {{- tpl (toYaml .Values.metadata.labels) . | nindent 4 }}
+spec:
+  replicas: {{ .Values.deployment.replicaCount }}
+  {{- if .Values.deployment.updateStrategyEnabled }}
+  strategy:
+    {{- toYaml .Values.deployment.updateStrategy | nindent 4 }}
+  {{- end }}
+  {{- if .Values.deployment.revisionHistoryLimitEnabled }}
+  revisionHistoryLimit: {{ .Values.deployment.revisionHistoryLimit }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- tpl (toYaml .Values.metadata.labels) . | nindent 6 }}
+  template:
+    metadata:
+      name: {{ tpl (toYaml .Values.metadata.name) . }}
+      labels:
+        {{- tpl (toYaml .Values.metadata.labels) . | nindent 8 }}
+    spec:
+      {{- if .Values.securityContext.enabled }}
+      securityContext:
+        {{- toYaml .Values.securityContext.context | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: sample-dir # Create an volume to avoid write permission issue
+          emptyDir: {}
+      containers:
+        - name: {{ .Values.image.name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.targetPort }}
+          volumeMounts:
+            - name: sample-dir
+              mountPath: /opt/sample-dir
+          envFrom:
+            - configMapRef:
+                name: {{ tpl (toYaml .Values.metadata.name) . }}
+            - secretRef:
+                name: {{ tpl (toYaml .Values.metadata.name) . }}
+          {{- if .Values.container.resourceLimitsEnabled }}
+          resources:
+            {{- toYaml .Values.container.resourcesLimits | nindent 12 }}
+          {{- end }}
+          {{- if .Values.container.probes.livenessProbeEnabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.container.probes.liveness.path }}
+              port: {{ .Values.service.targetPort }}
+            initialDelaySeconds: {{ .Values.container.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.container.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.container.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.container.probes.liveness.failureThreshold }}
+            successThreshold: {{ .Values.container.probes.liveness.successThreshold }}
+          {{- end }}
+          {{- if .Values.container.probes.readinessProbeEnabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.container.probes.readiness.path }}
+              port: {{ .Values.service.targetPort }}
+            initialDelaySeconds: {{ .Values.container.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.container.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.container.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.container.probes.readiness.failureThreshold }}
+            successThreshold: {{ .Values.container.probes.readiness.successThreshold }}
+          {{- end }}
+ 

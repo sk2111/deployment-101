@@ -1,0 +1,16 @@
+name: <your-app>
+
+container:
+  resourceLimitsEnabled: true
+  resourcesLimits:
+    limits:
+      cpu: "2"
+      memory: "3Gi"
+    requests:
+      cpu: "2"
+      memory: "3Gi"
+
+autoscaling:
+  minReplicas: 3
+  maxReplicas: 3
+ 
